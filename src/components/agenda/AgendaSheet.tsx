@@ -50,10 +50,12 @@ import {
   UserCog,
   ChevronsUpDown,
   Check,
+  AlertCircle,
 } from "lucide-react";
 
 export interface Evento {
   id: string;
+  data: string;
   hora: string;
   duracao: number;
   pet: string;
@@ -64,12 +66,15 @@ export interface Evento {
   observacoes: string;
 }
 
-export type SheetAction = { type: "new" } | { type: "view"; evento: Evento } | null;
+export type SheetAction = { type: "new"; selectedDate?: string } | { type: "view"; evento: Evento } | null;
 
 interface AgendaSheetProps {
   action: SheetAction;
   onClose: () => void;
   onSave: (evento: Evento) => void;
+  error?: string | null;
+  onClearError?: () => void;
+  checkConflict?: (evento: Partial<Evento>) => { pet: string | null; responsavel: string | null };
 }
 
 const PETS_MOCK = ["Zeus", "Thor", "Mel", "Luna", "Pérola", "Isis Magdalena", "Buster"];
@@ -123,11 +128,20 @@ function calcHoraFim(horaInicio: string, minutos: number): string {
   return `${String(Math.floor(total / 60) % 24).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
+export function AgendaSheet({ action, onClose, onSave, error, onClearError, checkConflict }: AgendaSheetProps) {
   const [internalMode, setInternalMode] = useState<"view" | "edit" | "new" | null>(null);
   const [draft, setDraft] = useState<Partial<Evento>>({});
   const [isDirty, setIsDirty] = useState(false);
   const [openPetCombo, setOpenPetCombo] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<{ pet: string | null; responsavel: string | null }>({ pet: null, responsavel: null });
+
+  useEffect(() => {
+    if (checkConflict && (draft.hora || draft.pet || draft.responsavel)) {
+      setFieldErrors(checkConflict(draft));
+    } else {
+      setFieldErrors({ pet: null, responsavel: null });
+    }
+  }, [draft.hora, draft.duracao, draft.pet, draft.responsavel, draft.data, checkConflict]);
 
   useEffect(() => {
     if (!action) {
@@ -136,23 +150,33 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
       setIsDirty(false);
       return;
     }
-    if (action.type === "new") {
-      setInternalMode("new");
-      setDraft({
-        hora: "",
-        duracao: 30,
-        pet: "",
-        servico: "",
-        tutor: "",
-        responsavel: "",
-        status: "Programado",
-        observacoes: "",
-      });
-      setIsDirty(false);
-    } else if (action.type === "view") {
-      setInternalMode("view");
-      setDraft({ ...action.evento });
-      setIsDirty(false);
+
+    // Só inicializa o draft se for uma nova ação ou se o ID/Data mudar
+    // Isso evita que o formulário seja limpo ao selecionar um responsável (que causa re-render no pai)
+    const isNewAction = 
+      (action.type === "new" && draft.data !== action.selectedDate) ||
+      (action.type === "view" && draft.id !== action.evento.id);
+
+    if (isNewAction || !internalMode) {
+      if (action.type === "new") {
+        setInternalMode("new");
+        setDraft({
+          data: action.selectedDate || "",
+          hora: "",
+          duracao: 30,
+          pet: "",
+          servico: "",
+          tutor: "",
+          responsavel: "",
+          status: "Programado",
+          observacoes: "",
+        });
+        setIsDirty(false);
+      } else if (action.type === "view") {
+        setInternalMode("view");
+        setDraft({ ...action.evento });
+        setIsDirty(false);
+      }
     }
   }, [action]);
 
@@ -162,11 +186,7 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
 
   function handleCloseAction(open: boolean) {
     if (!open) {
-      if (isDirty) {
-        if (window.confirm("Existem alterações não salvas. Deseja realmente fechar?")) onClose();
-      } else {
-        onClose();
-      }
+      onClose();
     }
   }
 
@@ -177,6 +197,7 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
   function handleChange(field: keyof Evento, value: any) {
     setDraft((prev) => ({ ...prev, [field]: value }));
     setIsDirty(true);
+    if (error && onClearError) onClearError();
   }
 
   function handleSaveClick() {
@@ -186,6 +207,7 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
     }
     onSave({
       id: draft.id || "",
+      data: draft.data || "",
       hora: draft.hora!,
       duracao: Number(draft.duracao),
       pet: draft.pet!,
@@ -298,7 +320,7 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
 
             {/* Pet */}
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium text-muted-foreground">
+              <label className={cn("text-xs font-medium text-muted-foreground transition-colors", !!fieldErrors.pet && "text-destructive")}>
                 Pet {!isView && <span className="text-destructive ml-0.5">*</span>}
               </label>
               {isView ? (
@@ -317,6 +339,7 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
                           }}
                           onClick={() => setOpenPetCombo(true)}
                           autoComplete="off"
+                          aria-invalid={!!fieldErrors.pet}
                           className="pr-10"
                         />
                         <ChevronsUpDown className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 shrink-0 opacity-50 pointer-events-none" />
@@ -370,6 +393,12 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
                       </Command>
                     </PopoverContent>
                   </Popover>
+                </div>
+              )}
+              {fieldErrors.pet && !isView && (
+                <div className="flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground animate-in fade-in slide-in-from-top-1 px-1 mt-1">
+                  <AlertCircle className="h-3 w-3" />
+                  {fieldErrors.pet}
                 </div>
               )}
             </div>
@@ -456,7 +485,7 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
 
               {/* Responsável — select de funcionários */}
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-medium text-muted-foreground">Responsável</label>
+                <label className={cn("text-xs font-medium text-muted-foreground transition-colors", !!fieldErrors.responsavel && "text-destructive")}>Responsável</label>
                 {isView ? (
                   <div className="flex items-center gap-1.5">
                     <IdCard className="h-3.5 w-3.5 text-muted-foreground" />
@@ -467,7 +496,10 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
                     value={draft.responsavel || ""}
                     onValueChange={(v) => handleChange("responsavel", v)}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger 
+                      aria-invalid={!!fieldErrors.responsavel}
+                      className="w-full"
+                    >
                       <SelectValue placeholder="Selecione" />
                     </SelectTrigger>
                     <SelectContent>
@@ -476,6 +508,12 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
                       ))}
                     </SelectContent>
                   </Select>
+                )}
+                {fieldErrors.responsavel && !isView && (
+                  <div className="flex items-center gap-1.5 text-[11px] font-normal text-muted-foreground animate-in fade-in slide-in-from-top-1 px-1 mt-1">
+                    <AlertCircle className="h-3 w-3" />
+                    {fieldErrors.responsavel}
+                  </div>
                 )}
               </div>
 
@@ -502,21 +540,27 @@ export function AgendaSheet({ action, onClose, onSave }: AgendaSheetProps) {
         </div>
 
         {/* RODAPÉ */}
-        <div className="px-6 py-4 border-t shrink-0 flex items-center justify-end gap-2">
-          {isView ? (
-            <Button onClick={handleEditClick} className="gap-2">
-              <Edit2 className="h-4 w-4" /> Editar
-            </Button>
-          ) : (
-            <>
-              <Button variant="outline" onClick={handleCancelClick}>
-                Cancelar
+        <div className="px-6 py-4 border-t shrink-0 flex flex-col gap-3">
+          <div className="flex items-center justify-end gap-2 w-full">
+            {isView ? (
+              <Button onClick={handleEditClick} className="gap-2">
+                <Edit2 className="h-4 w-4" /> Editar
               </Button>
-              <Button onClick={handleSaveClick} className="gap-2">
-                <Save className="h-4 w-4" /> Salvar
-              </Button>
-            </>
-          )}
+            ) : (
+              <>
+                <Button variant="outline" onClick={handleCancelClick}>
+                  Cancelar
+                </Button>
+                <Button 
+                  onClick={handleSaveClick} 
+                  className={cn("gap-2", (!!fieldErrors.pet || !!fieldErrors.responsavel) && "opacity-50 grayscale cursor-not-allowed")}
+                  disabled={!!fieldErrors.pet || !!fieldErrors.responsavel}
+                >
+                  <Save className="h-4 w-4" /> Salvar
+                </Button>
+              </>
+            )}
+          </div>
         </div>
 
       </SheetContent>
